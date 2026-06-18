@@ -1,7 +1,9 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
-from invoice_generator import generate_pdf, save_invoice_to_db 
+import os
+from invoice_generator import generate_pdf, save_invoice_to_db
+from invoice_manager import InvoiceManagerWindow, update_invoice_in_db
 
 class InvoiceGenerator:
     def __init__(self, root):
@@ -11,6 +13,8 @@ class InvoiceGenerator:
 
 
         self.items = []
+        self.editing_invoice_id = None
+        self.old_pdf_path = None
 
         # Modern styling
         style = ttk.Style()
@@ -39,7 +43,7 @@ class InvoiceGenerator:
     def create_header(self):
         header = ttk.Frame(self.main_frame)
         header.pack(fill=tk.X, pady=(0, 15))
-        ttk.Label(header, text="AUTOMATED INVOICE AND QUOTATION GENERATOR", font=('Segoe UI', 16, 'bold'), foreground='#2a4b8d').pack()
+        ttk.Label(header, text="HEPTACLOUD INVOICE AND QUOTATION GENERATOR", font=('Segoe UI', 16, 'bold'), foreground='#2a4b8d').pack()
 
     def create_info_section(self):
         info_frame = ttk.Frame(self.main_frame)
@@ -69,6 +73,7 @@ class InvoiceGenerator:
         meta = ttk.LabelFrame(parent, text=" Invoice Details ", padding=10)
         meta.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
 
+        today_date = datetime.today().strftime("%d%m%y")
         meta_fields = [
             ("Invoice Number*", "invoice_number"),
             ("Date", "date", datetime.today().strftime("%Y-%m-%d")),
@@ -89,6 +94,9 @@ class InvoiceGenerator:
                 if rest:
                     entry.insert(0, rest[0])
                 setattr(self, attr, entry)
+
+        self.invoice_type.bind("<<ComboboxSelected>>", self.update_invoice_number)
+        self.date.bind("<KeyRelease>", self.update_invoice_number)
 
     def create_items_section(self):
         items_frame = ttk.LabelFrame(self.main_frame, text=" Invoice Items ", padding=10)
@@ -224,8 +232,80 @@ class InvoiceGenerator:
     def create_buttons(self):
         btn_frame = ttk.Frame(self.main_frame)
         btn_frame.pack(fill=tk.X, pady=(10, 0))
-        ttk.Button(btn_frame, text="Generate Invoice", command=self.generate_invoice).pack(side=tk.RIGHT, padx=5)
+        self.generate_btn = ttk.Button(btn_frame, text="Generate Invoice", command=self.generate_invoice)
+        self.generate_btn.pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Manage Data", command=self.open_data_manager).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text="Clear All", command=self.clear_all).pack(side=tk.RIGHT)
+
+    def update_invoice_number(self, event=None):
+        if self.editing_invoice_id:
+            return
+        
+        date_str = self.date.get().strip()
+        import re
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
+            try:
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                formatted_date = dt.strftime("%d%m%y")
+            except ValueError:
+                return
+        else:
+            current = self.invoice_number.get().strip()
+            inv_type = self.invoice_type.get()
+            prefix = "QTN" if inv_type == "QUOTATION" else "INV"
+            
+            m = re.match(r"^(INV|QTN)(/HC/\d{6})$", current)
+            if m:
+                new_number = prefix + m.group(2)
+                self.invoice_number.delete(0, tk.END)
+                self.invoice_number.insert(0, new_number)
+            return
+
+        inv_type = self.invoice_type.get()
+        prefix = "QTN" if inv_type == "QUOTATION" else "INV"
+        new_number = f"{prefix}/HC/{formatted_date}"
+        
+        current = self.invoice_number.get().strip()
+        if not current or re.match(r"^(INV|QTN)/HC/\d{6}$", current):
+            self.invoice_number.delete(0, tk.END)
+            self.invoice_number.insert(0, new_number)
+
+    def open_data_manager(self):
+        InvoiceManagerWindow(self)
+
+    def load_invoice_for_edit(self, invoice, db_items):
+        self.clear_all()
+        (
+            invoice_id, customer_name, phone, address, date, invoice_number,
+            invoice_type, status, subtotal, discount, tax, gross, notes, pdf_path
+        ) = invoice
+        self.editing_invoice_id = invoice_id
+        self.old_pdf_path = pdf_path
+
+        self.customer_name.insert(0, customer_name or "")
+        self.phone.insert(0, phone or "")
+        self.address.insert(0, address or "")
+        self.invoice_number.insert(0, invoice_number or "")
+        self.date.delete(0, tk.END)
+        self.date.insert(0, date.strftime("%Y-%m-%d") if hasattr(date, 'strftime') else str(date))
+        self.invoice_type.set(invoice_type or "INVOICE")
+        self.status.set(status or "UNPAID")
+        self.notes.delete(0, tk.END)
+        self.notes.insert(0, notes or "")
+        self.discount.delete(0, tk.END)
+        self.discount.insert(0, str(discount or 0))
+        self.tax.delete(0, tk.END)
+        self.tax.insert(0, str(tax or 0))
+
+        for desc, qty, unit_price, total in db_items:
+            item = {"desc": desc, "qty": int(qty), "unit_price": float(unit_price), "total": float(total)}
+            self.items.append(item)
+            self.tree.insert('', 'end', values=(
+                desc, qty, f"Rp {float(unit_price):,.0f}", f"Rp {float(total):,.0f}"
+            ))
+
+        self.update_totals()
+        self.generate_btn.config(text="Update Invoice")
 
     def generate_invoice(self):
         # Collect client info
@@ -279,7 +359,6 @@ class InvoiceGenerator:
         }
 
         try:
-            # Generate PDF and save invoice
             pdf_path = generate_pdf(
                 customer=customer_data,
                 items=self.items,
@@ -290,18 +369,40 @@ class InvoiceGenerator:
                 notes=notes
             )
 
-            save_invoice_to_db(
-                customer=customer_data,
-                items=self.items,
-                subtotal=subtotal,
-                discount=discount,
-                tax=tax,
-                gross=total,
-                notes=notes,
-                pdf_path=pdf_path
-            )
-
-            messagebox.showinfo("Success", f"Invoice generated successfully:\n{pdf_path}")
+            if self.editing_invoice_id:
+                update_invoice_in_db(
+                    self.editing_invoice_id,
+                    customer=customer_data,
+                    items=self.items,
+                    subtotal=subtotal,
+                    discount=discount,
+                    tax=tax,
+                    gross=total,
+                    notes=notes,
+                    pdf_path=pdf_path
+                )
+                if self.old_pdf_path and self.old_pdf_path != pdf_path:
+                    if os.path.exists(self.old_pdf_path):
+                        try:
+                            os.remove(self.old_pdf_path)
+                        except OSError:
+                            pass
+                self.editing_invoice_id = None
+                self.old_pdf_path = None
+                self.generate_btn.config(text="Generate Invoice")
+                messagebox.showinfo("Success", f"Invoice updated successfully:\n{pdf_path}")
+            else:
+                save_invoice_to_db(
+                    customer=customer_data,
+                    items=self.items,
+                    subtotal=subtotal,
+                    discount=discount,
+                    tax=tax,
+                    gross=total,
+                    notes=notes,
+                    pdf_path=pdf_path
+                )
+                messagebox.showinfo("Success", f"Invoice generated successfully:\n{pdf_path}")
 
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred while generating the invoice:\n{str(e)}")
@@ -309,6 +410,7 @@ class InvoiceGenerator:
     def clear_all(self):
         for attr in ['customer_name', 'phone', 'address', 'email', 'invoice_number', 'date']:
             getattr(self, attr).delete(0, tk.END)
+        self.date.insert(0, datetime.today().strftime("%Y-%m-%d"))
         for cb in ['invoice_type', 'status']:
             getattr(self, cb).current(0)
         self.notes.delete(0, tk.END)
@@ -318,6 +420,9 @@ class InvoiceGenerator:
         self.tax.insert(0, "0")
         self.tree.delete(*self.tree.get_children())
         self.items.clear()
+        self.editing_invoice_id = None
+        self.old_pdf_path = None
+        self.generate_btn.config(text="Generate Invoice")
         self.update_totals()
 
 if __name__ == "__main__":

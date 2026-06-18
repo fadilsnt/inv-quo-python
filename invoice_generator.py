@@ -267,8 +267,6 @@ def generate_pdf(customer, items, subtotal, discount, tax, gross, notes):
     label_value(pdf, rx + 3, pdf.get_y(), "Tipe", customer['invoice_type'],
                 w_lbl=_rlbl_w, w_colon=_rcol_w, w_val=_rval_w, row_h=rh)
     pdf.ln(rh + 0.5)
-    label_value(pdf, rx + 3, pdf.get_y(), "Status", customer['status'],
-                w_lbl=_rlbl_w, w_colon=_rcol_w, w_val=_rval_w, row_h=rh)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # 4. TABEL ITEM
