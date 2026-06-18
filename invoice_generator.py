@@ -115,7 +115,9 @@ def generate_pdf(customer, items, subtotal, discount, tax, gross, notes):
     if not os.path.exists("invoices"):
         os.makedirs("invoices")
 
-    file_name = f"invoice_{customer['invoice_number']}.pdf"
+    # Sanitasi invoice number - hapus karakter yang tidak valid untuk nama file
+    safe_invoice_number = str(customer['invoice_number']).replace("/", "_").replace("\\", "_")
+    file_name = f"invoice_{safe_invoice_number}.pdf"
     file_path = f"invoices/{file_name}"
 
     pdf = FPDF('P', 'mm', 'A4')

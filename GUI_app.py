@@ -15,6 +15,7 @@ class InvoiceGenerator:
         self.items = []
         self.editing_invoice_id = None
         self.old_pdf_path = None
+        self.editing_item_index = None  # Track which item is being edited
 
         # Modern styling
         style = ttk.Style()
@@ -105,15 +106,17 @@ class InvoiceGenerator:
         # Set fixed height for the treeview (for example, 200 pixels)
         tree_height = 8  # This controls the number of visible rows
 
-        self.tree = ttk.Treeview(items_frame, columns=('desc', 'qty', 'price', 'total'), show='headings', height=tree_height)
+        self.tree = ttk.Treeview(items_frame, columns=('desc', 'qty', 'price', 'total', 'action'), show='headings', height=tree_height)
         self.tree.heading('desc', text='Description')
         self.tree.heading('qty', text='Qty')
         self.tree.heading('price', text='Unit Price')
         self.tree.heading('total', text='Total')
-        self.tree.column('desc', width=300)
-        self.tree.column('qty', width=80, anchor=tk.CENTER)
-        self.tree.column('price', width=120, anchor=tk.E)
-        self.tree.column('total', width=120, anchor=tk.E)
+        self.tree.heading('action', text='Aksi')
+        self.tree.column('desc', width=250)
+        self.tree.column('qty', width=60, anchor=tk.CENTER)
+        self.tree.column('price', width=100, anchor=tk.E)
+        self.tree.column('total', width=100, anchor=tk.E)
+        self.tree.column('action', width=70, anchor=tk.CENTER)
         self.tree.pack(fill=tk.X)
 
         # Optional: Add vertical scrollbar to the treeview
@@ -122,6 +125,7 @@ class InvoiceGenerator:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.setup_tree_context_menu()
+        self.tree.bind('<Button-1>', self.on_item_click)
 
         controls = ttk.Frame(items_frame)
         controls.pack(fill=tk.X, pady=(10, 0))
@@ -137,7 +141,47 @@ class InvoiceGenerator:
         self.item_price = ttk.Entry(controls, width=10)
         self.item_price.pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(controls, text="Add Item", command=self.add_item).pack(side=tk.LEFT, padx=10)
+        self.add_item_btn = ttk.Button(controls, text="Add Item", command=self.add_item)
+        self.add_item_btn.pack(side=tk.LEFT, padx=10)
+
+
+    def on_item_click(self, event):
+        """Handle item treeview clicks - edit or delete"""
+        region = self.tree.identify_region(event.x, event.y)
+        row_id = self.tree.identify_row(event.y)
+        column = self.tree.identify_column(event.x)
+        
+        if not row_id or not column:
+            return
+        
+        # Check if clicking on "Hapus" button (action column, column index 5)
+        if column == '#5':
+            index = self.tree.index(row_id)
+            self.delete_item_at_index(index)
+            return
+        
+        # Otherwise, load item for editing
+        index = self.tree.index(row_id)
+        item = self.items[index]
+        
+        self.editing_item_index = index
+        self.item_desc.delete(0, tk.END)
+        self.item_qty.delete(0, tk.END)
+        self.item_price.delete(0, tk.END)
+        
+        self.item_desc.insert(0, item['desc'])
+        self.item_qty.insert(0, str(item['qty']))
+        self.item_price.insert(0, str(item['unit_price']))
+        self.add_item_btn.config(text="Update Item")
+
+
+    def delete_item_at_index(self, index):
+        """Delete item at specified index"""
+        if 0 <= index < len(self.items):
+            del self.items[index]
+            self.tree.delete(self.tree.get_children()[index])
+            self.editing_item_index = None
+            self.update_totals()
 
 
     def setup_tree_context_menu(self):
@@ -174,8 +218,21 @@ class InvoiceGenerator:
             price = float(price)
             total = qty * price
             item = {"desc": desc, "qty": qty, "unit_price": price, "total": total}
-            self.items.append(item)
-            self.tree.insert('', 'end', values=(desc, qty, f"Rp {price:,.0f}", f"Rp {total:,.0f}"))
+            
+            # If editing existing item, update it
+            if self.editing_item_index is not None:
+                self.items[self.editing_item_index] = item
+                # Update the tree row
+                tree_children = self.tree.get_children()
+                self.tree.item(tree_children[self.editing_item_index], 
+                              values=(desc, qty, f"Rp {price:,.0f}", f"Rp {total:,.0f}", "Hapus"))
+                self.editing_item_index = None
+                self.add_item_btn.config(text="Add Item")
+            else:
+                # Add new item
+                self.items.append(item)
+                self.tree.insert('', 'end', values=(desc, qty, f"Rp {price:,.0f}", f"Rp {total:,.0f}", "Hapus"))
+            
             self.update_totals()
             self.item_desc.delete(0, tk.END)
             self.item_qty.delete(0, tk.END)
@@ -301,7 +358,7 @@ class InvoiceGenerator:
             item = {"desc": desc, "qty": int(qty), "unit_price": float(unit_price), "total": float(total)}
             self.items.append(item)
             self.tree.insert('', 'end', values=(
-                desc, qty, f"Rp {float(unit_price):,.0f}", f"Rp {float(total):,.0f}"
+                desc, qty, f"Rp {float(unit_price):,.0f}", f"Rp {float(total):,.0f}", "Hapus"
             ))
 
         self.update_totals()
@@ -420,8 +477,13 @@ class InvoiceGenerator:
         self.tax.insert(0, "0")
         self.tree.delete(*self.tree.get_children())
         self.items.clear()
+        self.item_desc.delete(0, tk.END)
+        self.item_qty.delete(0, tk.END)
+        self.item_price.delete(0, tk.END)
         self.editing_invoice_id = None
+        self.editing_item_index = None
         self.old_pdf_path = None
+        self.add_item_btn.config(text="Add Item")
         self.generate_btn.config(text="Generate Invoice")
         self.update_totals()
 
